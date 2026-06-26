@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Block Buster - Deluxe Edition</title>
+    <link rel="stylesheet" href="https://pyscript.net/releases/2024.1.1/core.css">
+    <script type="module" src="https://pyscript.net/releases/2024.1.1/core.js"></script>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: white;
+            font-family: Arial, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+        .game-container {
+            display: flex;
+            background-color: #111a2e;
+            border: 3px solid #556b2f;
+            border-radius: 12px;
+            padding: 15px;
+            box-shadow: 0px 0px 30px rgba(0,0,0,0.7);
+        }
+        .sidebar {
+            width: 150px;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            align-items: center;
+            margin-right: 15px;
+            border-right: 2px dashed #334466;
+            padding-right: 15px;
+        }
+        .sidebar h2 {
+            font-size: 16px;
+            color: #fdfd96;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .btn {
+            background-color: #2a3b5c;
+            color: white;
+            border: 2px solid #556b2f;
+            padding: 10px 15px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 6px;
+            width: 100%;
+            margin-bottom: 12px;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        .btn:hover { background-color: #3b5282; }
+        .btn-start { background-color: #50c878; color: black; border-color: #white; }
+        .btn-start:hover { background-color: #63db8b; }
+        
+        .difficulty-select {
+            width: 100%;
+            background-color: #1d2a44;
+            color: white;
+            border: 2px solid #c87d8a;
+            padding: 8px;
+            border-radius: 6px;
+            font-weight: bold;
+            margin-bottom: 25px;
+            cursor: pointer;
+        }
+        
+        .canvas-area {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas {
+            background-color: #1d2a44;
+            border-radius: 6px;
+        }
+        .controls-hint { margin-top: 10px; color: #c87d8a; font-style: italic; font-size: 13px; }
+    </style>
+</head>
+<body>
+
+    <div class="game-container">
+        <div class="sidebar">
+            <h2>CONTROLS</h2>
+            
+            <label style="font-size: 12px; color: #c87d8a; margin-bottom: 5px; font-weight: bold;">DIFFICULTY:</label>
+            <select id="diffSelect" class="difficulty-select">
+                <option value="easy">Easy (Relaxed)</option>
+                <option value="medium" selected>Medium (Classic)</option>
+                <option value="difficult">Difficult (Fast!)</option>
+            </select>
+
+            <button id="startBtn" class="btn btn-start">START GAME</button>
+            <button id="pauseBtn" class="btn">PAUSE</button>
+        </div>
+
+        <div class="canvas-area">
+            <canvas id="gameCanvas" width="600" height="450"></canvas>
+            <div class="controls-hint">◀ Use Left & Right Arrow Keys To Move Paddle ▶</div>
+        </div>
+    </div>
+
+    <script type="py">
+import math
+import random
+from pyodide.ffi import create_proxy
+from js import window, document, localStorage
+
+# Setup canvas elements
+canvas = document.getElementById("gameCanvas")
+ctx = canvas.getContext("2d")
+
+COLORS = {
+    "bg": "#1d2a44",
+    "paddle": "#556b2f",
+    "ball": "#fdfd96",
+    "bomb": "#000000",
+    "text": "#c87d8a",
+    "bricks": ["#50c878", "#c87d8a", "#fdfd96"],
+    "fireworks": ["#ff6b6b", "#4ecdc4", "#ffe66d", "#a855f7", "#ff9ff3"]
+}
+
+# Core State Machine System
+# Modes: "MENU", "PLAYING", "PAUSED", "GAMEOVER"
+game_state = "MENU" 
+score = 0
+high_score = int(localStorage.getItem("block_buster_high") or 0)
+end_text = ""
+end_text_color = ""
+
+# Speed Settings Config Dictionary
+SPEED_CONFIG = {
+    "easy": {"ball_speed": 3.0, "paddle_speed": 35},
+    "medium": {"ball_speed": 4.5, "paddle_speed": 45},
+    "difficult": {"ball_speed": 6.5, "paddle_speed": 55}
+}
+current_difficulty = "medium"
+
+# Structural Entities
+paddle_x = 250
+paddle_y = 410
+paddle_w = 100
+paddle_h = 13
+
+ball_x = 300
+ball_y = 250
+ball_radius = 8
+ball_dx = 0.0
+ball_dy = 0.0
+
+bricks = []
+bombs = []
+particles = []
+
+def build_brick_grid():
+    global bricks
+    bricks = []
+    for row in range(3):
+        for col in range(6):
+            bricks.append({
+                "x1": 10 + col * 98,
+                "y1": 50 + row * 30,
+                "w": 85,
+                "h": 20,
+                "color": COLORS["bricks"][row]
+            })
+
+def start_btn_clicked(event):
+    global game_state, score, paddle_x, ball_x, ball_y, ball_dx, ball_dy, bombs, particles, current_difficulty
+    
+    if game_state == "PLAYING":
+        return # Block multi-clicks while running
+        
+    # Read chosen difficulty right off the HTML dropdown menu
+    current_difficulty = document.getElementById("diffSelect").value
+    speed = SPEED_CONFIG[current_difficulty]["ball_speed"]
+    
+    # State Engine Reset Setup
+    score = 0
+    paddle_x = 250
+    ball_x = 300
+    ball_y = 240
+    ball_dx = random.choice([-1.0, 1.0]) * (speed * 0.7)
+    ball_dy = -speed
+    
+    bombs = []
+    particles = []
+    build_brick_grid()
+    
+    game_state = "PLAYING"
+    document.getElementById("startBtn").innerText = "RESTART"
+
+def pause_btn_clicked(event):
+    global game_state
+    if game_state == "PLAYING":
+        game_state = "PAUSED"
+        document.getElementById("pauseBtn").innerText = "RESUME"
+    elif game_state == "PAUSED":
+        game_state = "PLAYING"
+        document.getElementById("pauseBtn").innerText = "PAUSE"
+
+# Link HTML buttons up to Python operations
+document.getElementById("startBtn").addEventListener("click", create_proxy(start_btn_clicked))
+document.getElementById("pauseBtn").addEventListener("click", create_proxy(pause_btn_clicked))
+
+def handle_keydown(event):
+    global paddle_x
+    if game_state != "PLAYING":
+        return
+        
+    p_speed = SPEED_CONFIG[current_difficulty]["paddle_speed"]
+    if event.key == "ArrowLeft" and paddle_x > 0:
+        paddle_x -= p_speed
+    elif event.key == "ArrowRight" and paddle_x < 600 - paddle_w:
+        paddle_x += p_speed
+
+window.addEventListener("keydown", create_proxy(handle_keydown))
+
+def spawn_bomb(x, y):
+    if random.random() < 0.30:
+        bombs.append({"x": x, "y": y, "r": 10})
+
+def create_fireworks(x, y):
+    for i in range(12):
+        angle = (i / 12) * 2 * math.pi
+        speed = random.uniform(2, 4)
+        particles.append({
+            "x": x, "y": y,
+            "dx": math.cos(angle) * speed,
+            "dy": math.sin(angle) * speed,
+            "color": random.choice(COLORS["fireworks"]),
+            "life": 20
+        })
+
+def update_game():
+    global game_state, ball_x, ball_y, ball_dx, ball_dy, score, high_score, end_text, end_text_color
+
+    if game_state != "PLAYING":
+        return
+
+    # Physics mechanics loops
+    ball_x += ball_dx
+    ball_y += ball_dy
+
+    if ball_x - ball_radius <= 0 or ball_x + ball_radius >= 600:
+        ball_dx = -ball_dx
+    if ball_y - ball_radius <= 0:
+        ball_dy = -ball_dy
+
+    # Paddle bounces
+    if (ball_y + ball_radius >= paddle_y and ball_y - ball_radius <= paddle_y + paddle_h and
+        ball_x >= paddle_x and ball_x <= paddle_x + paddle_w):
+        ball_dy = -abs(ball_dy)
+
+    # Collision grid arrays
+    for brick in bricks[:]:
+        if (ball_x + ball_radius >= brick["x1"] and ball_x - ball_radius <= brick["x1"] + brick["w"] and
+            ball_y + ball_radius >= brick["y1"] and ball_y - ball_radius <= brick["y1"] + brick["h"]):
+            
+            bx = brick["x1"] + brick["w"]/2
+            by = brick["y1"] + brick["h"]/2
+            
+            bricks.remove(brick)
+            ball_dy = -ball_dy
+            score += 10
+            
+            if score > high_score:
+                high_score = score
+                localStorage.setItem("block_buster_high", str(high_score))
+            
+            create_fireworks(bx, by)
+            spawn_bomb(bx, by)
+            break
+
+    # Particles rendering logic loop
+    for p in particles[:]:
+        p["x"] += p["dx"]
+        p["y"] += p["dy"]
+        p["life"] -= 1
+        if p["life"] <= 0:
+            particles.remove(p)
+
+    # Bombs loop
+    for b in bombs[:]:
+        b["y"] += 2.5
+        if (b["y"] + b["r"] >= paddle_y and b["y"] - b["r"] <= paddle_y + paddle_h and
+            b["x"] >= paddle_x and b["x"] <= paddle_x + paddle_w):
+            game_state = "GAMEOVER"
+            end_text = "BOOM! GAME OVER"
+            end_text_color = "red"
+            document.getElementById("startBtn").innerText = "START GAME"
+            return
+        if b["y"] >= 450:
+            bombs.remove(b)
+
+    # Pit Lose Condition
+    if ball_y >= 450:
+        game_state = "GAMEOVER"
+        end_text = "GAME OVER"
+        end_text_color = COLORS["text"]
+        document.getElementById("startBtn").innerText = "START GAME"
+        return
+
+    # Clear Board Victory Condition
+    if not bricks:
+        game_state = "GAMEOVER"
+        end_text = "YOU WIN THE ROUND!"
+        end_text_color = "#50c878"
+        document.getElementById("startBtn").innerText = "START GAME"
+        return
+
+def draw_game():
+    ctx.clearRect(0, 0, 600, 450)
+
+    # UI Panel Text Overlay 
+    ctx.fillStyle = "white"
+    ctx.font = "bold 14px Arial"
+    ctx.fillText(f"Score: {score}", 20, 25)
+    
+    ctx.fillStyle = "#ffe66d"
+    ctx.fillText(f"🏆 High Score: {high_score}", 460, 25)
+
+    # Layout elements
+    ctx.fillStyle = COLORS["paddle"]
+    ctx.fillRect(paddle_x, paddle_y, paddle_w, paddle_h)
+
+    # Bricks draw loops
+    for brick in bricks:
+        ctx.fillStyle = brick["color"]
+        ctx.fillRect(brick["x1"], brick["y1"], brick["w"], brick["h"])
+
+    for p in particles:
+        ctx.fillStyle = p["color"]
+        ctx.beginPath()
+        ctx.arc(p["x"], p["y"], 2, 0, 2 * math.pi)
+        ctx.fill()
+
+    for b in bombs:
+        ctx.fillStyle = COLORS["bomb"]
+        ctx.strokeStyle = "red"
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.arc(b["x"], b["y"], b["r"], 0, 2 * math.pi)
+        ctx.fill()
+        ctx.stroke()
+        ctx.fillStyle = "red"
+        ctx.font = "bold 10px Arial"
+        ctx.fillText("X", b["x"] - 4, b["y"] + 4)
+
+    # Dynamic Menu overlays depending on State Engine
+    if game_state == "MENU":
+        ctx.fillStyle = "rgba(29, 42, 68, 0.85)"
+        ctx.fillRect(0, 0, 600, 450)
+        ctx.fillStyle = "#fdfd96"
+        ctx.font = "bold 28px Arial"
+        ctx.textAlign = "center"
+        ctx.fillText("READY TO PLAY?", 300, 210)
+        ctx.fillStyle = "white"
+        ctx.font = "16px Arial"
+        ctx.fillText("Choose your difficulty on the left and click START!", 300, 250)
+        ctx.textAlign = "left"
+        
+    elif game_state == "PAUSED":
+        ctx.fillStyle = "rgba(0, 0, 0, 0.5)"
+        ctx.fillRect(0, 0, 600, 450)
+        ctx.fillStyle = "#ffe66d"
+        ctx.font = "bold 32px Arial"
+        ctx.textAlign = "center"
+        ctx.fillText("GAME PAUSED", 300, 225)
+        ctx.textAlign = "left"
+        
+    elif game_state == "GAMEOVER":
+        ctx.fillStyle = "rgba(10, 15, 30, 0.9)"
+        ctx.fillRect(0, 0, 600, 450)
+        ctx.fillStyle = end_text_color
+        ctx.font = "bold 30px Arial"
+        ctx.textAlign = "center"
+        ctx.fillText(end_text, 300, 200)
+        ctx.fillStyle = "white"
+        ctx.font = "16px Arial"
+        ctx.fillText("Click the green START button on the left to retry!", 300, 250)
+        ctx.textAlign = "left"
+    else:
+        # Drawing ball only if actively playing round
+        ctx.fillStyle = COLORS["ball"]
+        ctx.beginPath()
+        ctx.arc(ball_x, ball_y, ball_radius, 0, 2 * math.pi)
+        ctx.fill()
+
+def main_game_loop(timestamp):
+    update_game()
+    draw_game()
+    window.requestAnimationFrame(create_proxy(main_game_loop))
+
+# Run first construction setup, then stand by on the MENU state
+build_brick_grid()
+window.requestAnimationFrame(create_proxy(main_game_loop))
+    </script>
+</body>
+</html>
